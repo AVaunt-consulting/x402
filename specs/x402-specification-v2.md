@@ -608,6 +608,8 @@ The x402 protocol defines standard error codes that may be returned by facilitat
 - **`invalid_transaction_state`**: Blockchain transaction failed or was rejected
 - **`unexpected_verify_error`**: Unexpected error occurred during payment verification
 - **`unexpected_settle_error`**: Unexpected error occurred during payment settlement
+- **`invalid_exact_radix_expired`**: Radix transaction timestamp or epoch bounds are out of range
+- **`invalid_exact_radix_signature`**: Missing or invalid signatures on a Radix subintent or transaction
 
 **10. Security Considerations**
 
