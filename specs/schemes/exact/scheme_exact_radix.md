@@ -7,8 +7,6 @@
 
 ## Supported Networks
 
-This spec uses CAIP-2 style identifiers (provisional — no ratified Radix namespace exists in CAIP yet):
-
 - `radix:mainnet` — Radix Mainnet (network ID `1`)
 - `radix:stokenet` — Radix Stokenet (network ID `2`)
 
@@ -61,7 +59,7 @@ In addition to the standard x402 `PaymentRequirements` fields (see [§5 Types](.
 - `network`: MUST be `radix:mainnet` or `radix:stokenet`.
 - `asset`: A valid Radix fungible resource address (bech32m-encoded; `resource_rdx1...` on mainnet, `resource_tdx_2_1...` on stokenet).
 - `payTo`: The Radix account address that receives the payment.
-- `amount`: An exact decimal amount of the asset to transfer.
+- `amount`: A base-10 decimal string. Comparison against the manifest `Decimal` argument is **numeric, not lexical** — clients MAY emit any valid Radix `Decimal` representation (e.g. `"10"`, `"10.0"`, `"10.000000000000000000"` are all equivalent); facilitators MUST parse both `requirements.amount` and the manifest `Decimal` argument as Radix `Decimal` values and compare for numeric equality.
 
 The `extra` field MUST include:
 
@@ -124,6 +122,8 @@ The facilitator determines how to deserialize the value by inspecting `accepted.
 | `"nonSponsored"` | `NotarizedTransactionV2` | Fully signed and notarized transaction |
 
 Hex strings MUST be lowercase, with no `0x` prefix.
+
+All bech32m-encoded addresses (resource, account, component, transaction-intent and subintent hashes) appearing in `PaymentRequirements`, manifest arguments, and `SettlementResponse` MUST be in canonical lowercase form. Facilitators compare addresses by string equality; uppercase or mixed-case bech32m payloads MAY be rejected as `invalid_payload`.
 
 **Full `PaymentPayload` example (sponsored):**
 
@@ -306,7 +306,7 @@ Before submitting any transaction, the facilitator MUST enforce all checks below
 
 The decoded `SignedPartialTransactionV2` MUST satisfy:
 
-- **No nested subintents:** `non_root_subintent_signatures` MUST be empty (the `PartialTransactionV2` contains exactly one root subintent and no children).
+- **No nested subintents:** Both `partial_transaction.non_root_subintents` and `non_root_subintent_signatures` MUST be empty (the `PartialTransactionV2` contains exactly one root subintent and no children).
 - **Instruction count:** The subintent manifest MUST contain exactly **5 instructions**.
 - **Instruction sequence:**
 
@@ -319,13 +319,13 @@ The decoded `SignedPartialTransactionV2` MUST satisfy:
   | 4 | `YIELD_TO_PARENT` | yields exactly one bucket containing the withdrawn resource |
 
 - **Resource match:** The `Address` argument to `withdraw` and `TAKE_ALL_FROM_WORKTOP` MUST equal `requirements.asset`.
-- **Amount match:** The `Decimal` argument to `withdraw` MUST equal `requirements.amount` exactly.
+- **Amount match:** The `Decimal` argument to `withdraw` MUST equal `requirements.amount` when both are parsed as Radix `Decimal` (numeric equality, not string equality).
 
 ### 4. Transaction structure validation (non-sponsored mode)
 
 The decoded `NotarizedTransactionV2` MUST satisfy:
 
-- **No subintents:** The transaction MUST NOT contain any subintents.
+- **No subintents:** `transaction_intent.non_root_subintents` MUST be empty.
 - **Instruction count:** The transaction manifest MUST contain exactly **4 instructions**.
 - **Instruction sequence:**
 
@@ -337,7 +337,7 @@ The decoded `NotarizedTransactionV2` MUST satisfy:
   | 3 | `CALL_METHOD` | address = `payTo`, method = `"try_deposit_or_abort"`, args = `(bucket, None)` |
 
 - **Resource match:** `asset` in instructions 1 and 2 MUST equal `requirements.asset`.
-- **Amount match:** `amount` in instruction 1 MUST equal `requirements.amount` exactly.
+- **Amount match:** `amount` in instruction 1 MUST equal `requirements.amount` when both are parsed as Radix `Decimal` (numeric equality, not string equality).
 - **Destination match:** The address in instruction 3 MUST equal `requirements.payTo`.
 
 ### 5. Facilitator safety
@@ -366,7 +366,6 @@ These checks prevent the facilitator from being tricked into paying for the tran
 - `max_proposer_timestamp_exclusive` MUST be in the future relative to the current `proposer_round_timestamp`.
 - `max_proposer_timestamp_exclusive` MUST NOT exceed `proposer_round_timestamp + maxTimeoutSeconds + 60` (60 s construction tolerance).
 - `end_epoch_exclusive` MUST be greater than the current epoch.
-- The facilitator MUST reject subintents whose `SubintentHash` has already been settled or observed.
 
 **Non-sponsored mode:**
 
@@ -374,9 +373,10 @@ These checks prevent the facilitator from being tricked into paying for the tran
 - `IntentHeaderV2.intent_discriminator` MUST equal the value provided in `accepted.extra.intentDiscriminator`.
 - `max_proposer_timestamp_exclusive` MUST be set and satisfy the same timestamp rules as sponsored mode.
 - `end_epoch_exclusive` MUST be greater than the current epoch.
-- The facilitator MUST reject transactions whose `TransactionIntentHash` has already been settled or observed.
 
-**Replay hash retention:** Facilitators MUST retain seen hashes (subintent or transaction intent) for at least `maxTimeoutSeconds + 300` seconds (a 5-minute buffer past the latest possible expiry). Facilitators MAY prune hashes after this window because expired subintents and transactions are rejected by the ledger regardless.
+**Replay protection (both modes):** The facilitator MUST maintain a cache of `SubintentHash` (sponsored) and `TransactionIntentHash` (non-sponsored) values it has observed. A hash is added to the cache on first observation (verify or settle) and retained until the payload's `max_proposer_timestamp_exclusive` has passed. Any verify or settle for a hash already in the cache MUST be rejected with `invalid_exact_radix_expired`. Cache entries MAY be pruned once `max_proposer_timestamp_exclusive` has passed; from that point the Radix ledger rejects the payload regardless.
+
+> **Note:** Replay correctness is enforced by the Radix ledger (subintents are single-consumption; transaction intents are single-commit). The facilitator-side cache exists to short-circuit duplicates before they reach the gateway and to convert parallel duplicates into a clean rejection at the facilitator boundary, not as the primary security mechanism.
 
 ### 7. Signature validation
 
@@ -401,6 +401,8 @@ These checks prevent the facilitator from being tricked into paying for the tran
   - `payTo` increases by exactly `requirements.amount` of `requirements.asset`.
   - Expected network fees (from the fee payer).
   - No other unexpected balance changes.
+
+> **Scope of preview detection:** Preview executes against committed ledger state and detects duplicates that have already committed. Duplicates that are pending in a core node mempool — possibly on a different node than the one the gateway routed the preview to — may pass preview. The facilitator's hash cache (§6) catches those before submission; any that survive both layers are deduplicated by the ledger at commit time and surface as a terminal failure during settlement polling.
 
 Implementations MAY apply stricter policy controls (allowlists, max amounts, method constraints) but MUST NOT relax the rules above.
 
@@ -453,11 +455,9 @@ When verification or settlement fails, the facilitator MUST return an appropriat
 |---|---|
 | `invalid_payload` | Payload is malformed or contains invalid data — covers SBOR decode failure, wrong instruction count, unexpected instruction type or arguments, intent discriminator mismatch, and facilitator safety violations |
 | `invalid_payment_requirements` | Payment fields in the manifest do not match requirements — covers asset address mismatch, transfer amount mismatch, and deposit destination mismatch |
-| `invalid_exact_radix_expired` | Timestamp or epoch bounds are out of range, already passed, or subintent/transaction intent hash has already been seen (replay) |
+| `invalid_exact_radix_expired` | Timestamp or epoch bounds are out of range or already passed, OR the payload's `SubintentHash`/`TransactionIntentHash` has already been observed by this facilitator (replay) |
 | `invalid_exact_radix_signature` | Missing or invalid subintent/transaction signatures |
 | `unexpected_verify_error` | Transaction preview returned a status other than `CommitSuccess`, or another unexpected verification failure |
-
-The Radix-specific codes are also registered in the protocol-level error table in `x402-specification-v2.md` §9.
 
 ## Serialization
 
@@ -516,8 +516,8 @@ NotarizedTransactionV2
 | Platform | Package | Status |
 |---|---|---|
 | Rust | `radix-transactions` crate | Available |
-| Python, Swift, Kotlin | `radix-engine-toolkit` (UniFFI bindings) | Available |
-| TypeScript | @steleaio/radix-engine-toolkit npm package | Available |
+| Python | `radix-engine-toolkit` on PyPI (UniFFI binding) | Available |
+| TypeScript | `@steleaio/radix-engine-toolkit` npm package | Available — community fork adding V2 manifest/intent support not yet exposed by the official `@radixdlt/radix-engine-toolkit` |
 
 ## Security Considerations
 
@@ -549,7 +549,9 @@ Additional security considerations (replay attack prevention, trust model, authe
 
 #### Virtual badge mechanism
 
-On Radix, when a key signs a V2 transaction, the engine synthesizes a **virtual signature badge** in the transaction's auth zone. For Ed25519 keys, this badge is a `NonFungibleGlobalId` composed of:
+> **Curve restriction:** In sponsored mode, the facilitator's notary key MUST be Ed25519. Secp256k1 notaries are not supported by this spec.
+
+On Radix, when a key signs a V2 transaction, the engine synthesizes a **virtual signature badge** in the transaction's auth zone. The notary's badge is a `NonFungibleGlobalId` composed of:
 
 1. The well-known **Ed25519 signature virtual badge resource address** (network-specific, see below).
 2. A `NonFungibleLocalId::Bytes(blake2b_256(<public_key_bytes>)[6..])` — the last 26 bytes of the Blake2b-256 hash of the public key.
@@ -646,6 +648,8 @@ Radix uses bech32m encoding with network-specific human-readable parts (HRPs):
 | Component | `component_rdx1` | `component_tdx_2_1` |
 | Transaction intent hash | `txid_rdx1` | `txid_tdx_2_1` |
 | Subintent hash | `subtxid_rdx1` | `subtxid_tdx_2_1` |
+
+Bech32m is case-insensitive at decode time, but this spec mandates **canonical lowercase** for every encoded value to keep facilitator address comparisons a pure string equality. Mixed-case bech32m strings are not valid bech32m at all (the encoding forbids mixing); uppercase-only strings decode to the same bytes as their lowercase form but are out-of-spec for x402 payloads.
 
 ### D. Gateway API endpoints
 
