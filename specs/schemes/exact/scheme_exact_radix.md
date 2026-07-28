@@ -59,7 +59,9 @@ In addition to the standard x402 `PaymentRequirements` fields (see [§5 Types](.
 - `network`: MUST be `radix:mainnet` or `radix:stokenet`.
 - `asset`: A valid Radix fungible resource address (bech32m-encoded; `resource_rdx1...` on mainnet, `resource_tdx_2_1...` on stokenet).
 - `payTo`: The Radix account address that receives the payment.
-- `amount`: A base-10 decimal string. Comparison against the manifest `Decimal` argument is **numeric, not lexical** — clients MAY emit any valid Radix `Decimal` representation (e.g. `"10"`, `"10.0"`, `"10.000000000000000000"` are all equivalent); facilitators MUST parse both `requirements.amount` and the manifest `Decimal` argument as Radix `Decimal` values and compare for numeric equality.
+- `amount`: A base-10 decimal string interpreted as a Radix `Decimal` (whole tokens, not atomic subunits). Comparison against the manifest `Decimal` argument is **numeric, not lexical** — clients MAY emit any valid Radix `Decimal` representation (e.g. `"10"`, `"10.0"`, `"10.000000000000000000"` are all equivalent); facilitators MUST parse both `requirements.amount` and the manifest `Decimal` argument as Radix `Decimal` values and compare for numeric equality.
+
+> **Deviation from core-spec atomic units:** The core specification describes `amount` as "atomic token units". Radix transaction manifests express fungible amounts exclusively as `Decimal` (18 fractional digits), and resources have per-resource divisibility (0–18), so there is no single integer-subunit representation to compare against. This spec therefore defines `amount` as a Radix `Decimal` string, with the numeric-equality rule above as the normative comparison. This mirrors the treatment of XRPL issued-currency values.
 
 The `extra` field MUST include:
 
@@ -453,8 +455,8 @@ When verification or settlement fails, the facilitator MUST return an appropriat
 
 | Error Code | Description |
 |---|---|
-| `invalid_payload` | Payload is malformed or contains invalid data — covers SBOR decode failure, wrong instruction count, unexpected instruction type or arguments, intent discriminator mismatch, and facilitator safety violations |
-| `invalid_payment_requirements` | Payment fields in the manifest do not match requirements — covers asset address mismatch, transfer amount mismatch, and deposit destination mismatch |
+| `invalid_payload` | Payload is malformed or does not match requirements — covers SBOR decode failure, wrong instruction count, unexpected instruction type or arguments, intent discriminator mismatch, facilitator safety violations, and asset address / transfer amount / deposit destination mismatches against `requirements` |
+| `invalid_payment_requirements` | The `PaymentRequirements` object itself is invalid or malformed — e.g., missing `extra.mode`, missing `extra.notaryBadge` in sponsored mode, an invalid `asset` or `payTo` address, or an `amount` that does not parse as a Radix `Decimal` |
 | `invalid_exact_radix_expired` | Timestamp or epoch bounds are out of range or already passed, OR the payload's `SubintentHash`/`TransactionIntentHash` has already been observed by this facilitator (replay) |
 | `invalid_exact_radix_signature` | Missing or invalid subintent/transaction signatures |
 | `unexpected_verify_error` | Transaction preview returned a status other than `CommitSuccess`, or another unexpected verification failure |
