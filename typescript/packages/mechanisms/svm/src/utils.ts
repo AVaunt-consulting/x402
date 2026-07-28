@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import {
+  getBase58Encoder,
   getBase64Encoder,
   getTransactionDecoder,
   getCompiledTransactionMessageDecoder,
+  type Blockhash,
   type Transaction,
   createSolanaRpc,
   devnet,
@@ -16,7 +19,7 @@ import {
 } from "@solana/kit";
 import { TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
 import { TOKEN_2022_PROGRAM_ADDRESS } from "@solana-program/token-2022";
-import type { Network } from "@x402/core/types";
+import type { Network, PaymentRequirements } from "@x402/core/types";
 import {
   SVM_ADDRESS_REGEX,
   DEVNET_RPC_URL,
@@ -65,6 +68,20 @@ export function normalizeNetwork(network: Network): string {
  */
 export function validateSvmAddress(address: string): boolean {
   return SVM_ADDRESS_REGEX.test(address);
+}
+
+/**
+ * Compute a stable, immutable cache key for a decoded transaction by hashing its
+ * message bytes. The fee-payer signature (slot 0) is overwritten by the facilitator
+ * before broadcast, so an attacker can randomize those bytes to bypass a wire-bytes
+ * cache key. The message is what every signer commits to, making its hash a reliable
+ * payment identity.
+ *
+ * @param transaction - Decoded transaction whose message bytes to hash
+ * @returns Base64-encoded SHA-256 hash of the transaction message bytes
+ */
+export function transactionMessageHash(transaction: Transaction): string {
+  return createHash("sha256").update(Buffer.from(transaction.messageBytes)).digest("base64");
 }
 
 /**
@@ -150,6 +167,49 @@ export function createRpcClient(
     default:
       throw new Error(`Unsupported network: ${network}`);
   }
+}
+
+/**
+ * Resolve the transaction-lifetime blockhash for a payment.
+ *
+ * Prefers a server-provided blockhash carried in the 402 challenge
+ * (`extra.recentBlockhash` + `extra.lastValidBlockHeight`) so the client needn't
+ * make its own RPC round-trip. Falls back to fetching one from `rpc` when the
+ * challenge omits it or contains a malformed value.
+ *
+ * @param rpc - RPC client used for the fallback fetch
+ * @param requirements - The payment requirements (challenge) being paid
+ * @returns The blockhash and its last-valid block height
+ */
+export async function resolveBlockhash(
+  rpc: ReturnType<typeof createRpcClient>,
+  requirements: PaymentRequirements,
+): Promise<{ blockhash: Blockhash; lastValidBlockHeight: bigint }> {
+  const provided = requirements.extra?.recentBlockhash;
+  if (typeof provided === "string" && provided !== "") {
+    try {
+      if (getBase58Encoder().encode(provided).length === 32) {
+        const lastValid = requirements.extra?.lastValidBlockHeight;
+        let lastValidBlockHeight = 0n;
+        if (typeof lastValid === "string" && /^\d+$/.test(lastValid)) {
+          lastValidBlockHeight = BigInt(lastValid);
+        } else if (
+          typeof lastValid === "number" &&
+          Number.isSafeInteger(lastValid) &&
+          lastValid >= 0
+        ) {
+          lastValidBlockHeight = BigInt(lastValid);
+        }
+
+        return { blockhash: provided as Blockhash, lastValidBlockHeight };
+      }
+    } catch {
+      // Invalid optional hints are ignored; fetch a usable blockhash below.
+    }
+  }
+
+  const { value } = await rpc.getLatestBlockhash().send();
+  return value;
 }
 
 /**

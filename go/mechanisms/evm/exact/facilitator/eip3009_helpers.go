@@ -9,7 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/x402-foundation/x402/go/mechanisms/evm"
+	"github.com/x402-foundation/x402/go/v2/mechanisms/evm"
 )
 
 // ParsedEIP3009Authorization contains the parsed transfer arguments used by verify and settle.
@@ -306,6 +306,7 @@ func ExecuteTransferWithAuthorization(
 	tokenAddress string,
 	parsed *ParsedEIP3009Authorization,
 	sigData *evm.ERC6492SignatureData,
+	dataSuffix []byte,
 ) (string, error) {
 	if sigData == nil {
 		return "", fmt.Errorf("missing signature data")
@@ -318,6 +319,7 @@ func ExecuteTransferWithAuthorization(
 			tokenAddress,
 			evm.TransferWithAuthorizationVRSABI,
 			evm.FunctionTransferWithAuthorization,
+			dataSuffix,
 			parsed.From,
 			parsed.To,
 			parsed.Value,
@@ -335,6 +337,7 @@ func ExecuteTransferWithAuthorization(
 		tokenAddress,
 		evm.TransferWithAuthorizationBytesABI,
 		evm.FunctionTransferWithAuthorization,
+		dataSuffix,
 		parsed.From,
 		parsed.To,
 		parsed.Value,
@@ -345,8 +348,9 @@ func ExecuteTransferWithAuthorization(
 	)
 }
 
-// DeploySmartWallet sends the ERC-6492 factory deployment transaction when enabled.
-func DeploySmartWallet(
+// SendDeployTransaction submits the ERC-6492 factory deployment transaction and waits
+// for the receipt, returning an error if the deployment transaction reverted.
+func SendDeployTransaction(
 	ctx context.Context,
 	signer evm.FacilitatorEvmSigner,
 	sigData *evm.ERC6492SignatureData,
@@ -366,7 +370,7 @@ func DeploySmartWallet(
 
 	receipt, err := signer.WaitForTransactionReceipt(ctx, txHash)
 	if err != nil {
-		return fmt.Errorf("failed to wait for deployment: %w", err)
+		return fmt.Errorf("failed to wait for deployment receipt: %w", err)
 	}
 	if receipt.Status != evm.TxStatusSuccess {
 		return fmt.Errorf("deployment transaction reverted")

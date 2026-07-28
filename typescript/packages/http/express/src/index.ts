@@ -113,13 +113,19 @@ export function paymentMiddlewareFromHTTPServer(
     }
   }
 
-  // Dynamically register bazaar extension if routes declare it and not already registered
-  // Skip if pre-registered (e.g., in serverless environments where static imports are used)
   let bazaarPromise: Promise<void> | null = null;
-  if (checkIfBazaarNeeded(httpServer.routes) && !httpServer.server.hasExtension("bazaar")) {
-    bazaarPromise = import("@x402/extensions/bazaar")
-      .then(({ bazaarResourceServerExtension }) => {
-        httpServer.server.registerExtension(bazaarResourceServerExtension);
+  if (checkIfBazaarNeeded(httpServer.routes)) {
+    if (!httpServer.server.hasExtension("bazaar")) {
+      bazaarPromise = import("@x402/extensions/bazaar").then(
+        ({ bazaarResourceServerExtension }) => {
+          httpServer.server.registerExtension(bazaarResourceServerExtension);
+        },
+      );
+    }
+    bazaarPromise = (bazaarPromise ?? Promise.resolve())
+      .then(() => import("@x402/extensions/bazaar"))
+      .then(({ validateBazaarRouteExtensions }) => {
+        validateBazaarRouteExtensions(httpServer.routes);
       })
       .catch(err => {
         console.error("Failed to load bazaar extension:", err);
@@ -195,7 +201,8 @@ export function paymentMiddlewareFromHTTPServer(
 
       case "payment-verified":
         // Payment is valid, need to wrap response for settlement
-        const { paymentPayload, paymentRequirements, declaredExtensions } = result;
+        const { cancellationDispatcher, paymentPayload, paymentRequirements, declaredExtensions } =
+          result;
 
         // Intercept and buffer all core methods that can commit response to client
         const originalWriteHead = res.writeHead.bind(res);
@@ -210,6 +217,14 @@ export function paymentMiddlewareFromHTTPServer(
           | ["flushHeaders", []];
         let bufferedCalls: BufferedCall[] = [];
         let settled = false;
+
+        const restoreResponseMethods = () => {
+          settled = true;
+          res.writeHead = originalWriteHead;
+          res.write = originalWrite;
+          res.end = originalEnd;
+          res.flushHeaders = originalFlushHeaders;
+        };
 
         // Create a promise that resolves when the handler finishes and calls res.end()
         let endCalled: () => void;
@@ -252,18 +267,29 @@ export function paymentMiddlewareFromHTTPServer(
         };
 
         // Proceed to the next middleware or route handler
-        next();
+        try {
+          await Promise.resolve(next());
+        } catch (error) {
+          await cancellationDispatcher.cancel({
+            reason: "handler_threw",
+            error,
+          });
+          bufferedCalls = [];
+          restoreResponseMethods();
+          return next(error);
+        }
 
         // Wait for the handler to actually call res.end() before checking status
         await endPromise;
 
         // If the response from the protected route is >= 400, do not settle payment
         if (res.statusCode >= 400) {
-          settled = true;
-          res.writeHead = originalWriteHead;
-          res.write = originalWrite;
-          res.end = originalEnd;
-          res.flushHeaders = originalFlushHeaders;
+          await cancellationDispatcher.cancel({
+            reason: "handler_failed",
+            responseStatus: res.statusCode,
+          });
+          res.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
+          restoreResponseMethods();
           // Replay all buffered calls in order
           for (const [method, args] of bufferedCalls) {
             if (method === "writeHead")
@@ -330,11 +356,9 @@ export function paymentMiddlewareFromHTTPServer(
           res.status(402).json({});
           return;
         } finally {
-          settled = true;
-          res.writeHead = originalWriteHead;
-          res.write = originalWrite;
-          res.end = originalEnd;
-          res.flushHeaders = originalFlushHeaders;
+          restoreResponseMethods();
+
+          res.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
 
           // Replay all buffered calls in order
           for (const [method, args] of bufferedCalls) {

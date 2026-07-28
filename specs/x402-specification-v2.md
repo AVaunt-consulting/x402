@@ -8,7 +8,7 @@ This specification defines the core x402 protocol for internet-native payments. 
 
 - **Protocol fundamentals**: Payment requirements format, payment payload structure, and core message schemas
 - **Facilitator interface**: Standard APIs for payment verification and settlement
-- **Payment schemes**: Extensible payment methods (currently supporting the "exact" scheme)
+- **Payment schemes**: Extensible payment methods (including `exact`, `upto`, and `batch-settlement`; see `specs/schemes/`)
 - **Security considerations**: Replay attack prevention and trust minimization
 
 **Out of Scope**: This specification does not include:
@@ -24,14 +24,14 @@ This specification defines the core x402 protocol for internet-native payments. 
 x402 is made up of three core components:
 
 1. **Types**: Core data structures (e.g., `PaymentRequirements`, `PaymentPayload`, `SettlementResponse`) that are independent of both transport mechanism and payment scheme
-2. **Logic**: Payment formation and verification logic that depends on the payment scheme (e.g., exact, deferred) and network (e.g., evm, solana, etc.)
+2. **Logic**: Payment formation and verification logic that depends on the payment scheme (e.g., exact, upto, batch-settlement) and network (e.g., evm, solana, etc.)
 3. **Representation**: How payment data is transmitted and signaled, which depends on the transport mechanism (e.g., HTTP, MCP, A2A)
 
 **1. Overview**
 
 x402 is an open payment standard that enables clients to pay for external resources. The protocol defines standardized message formats and payment flows that can be implemented over various transport layers, providing a standardized mechanism for payments across different payment schemes, networks and transport layers.
 
-This specification is based on the x402 protocol implementation and documentation available in the [Coinbase x402 repository](https://github.com/x402-foundation/x402). It aims to provide a comprehensive and implementation-agnostic specification for the x402 protocol.
+This specification is based on the x402 protocol implementation and documentation available in the [x402 repository](https://github.com/x402-foundation/x402). It aims to provide a comprehensive and implementation-agnostic specification for the x402 protocol.
 
 **2. Core Payment Flow**
 
@@ -69,7 +69,9 @@ This section defines the core data structures used in the x402 protocol. These a
 
 **5.1.1 JSON Payload**
 
-When a resource server requires payment, it responds with a payment required signal and a JSON payload containing payment requirements. Example:
+When a resource server requires payment, it responds with a payment required signal containing the `PaymentRequired` object. The transport defines where this object is carried. For HTTP, the canonical wire location is the base64-encoded `PAYMENT-REQUIRED` response header, see [HTTP Payment Required Signaling](./transports-v2/http.md#payment-required-signaling).
+
+Example `PaymentRequired` object:
 
 ```json
 {
@@ -78,7 +80,10 @@ When a resource server requires payment, it responds with a payment required sig
   "resource": {
     "url": "https://api.example.com/premium-data",
     "description": "Access to premium market data",
-    "mimeType": "application/json"
+    "mimeType": "application/json",
+    "serviceName": "Example Market Data",
+    "tags": ["market-data", "finance"],
+    "iconUrl": "https://api.example.com/icon.png"
   },
   "accepts": [
     {
@@ -112,23 +117,26 @@ The `PaymentRequired` schema contains the following fields:
 
 Each `PaymentRequirements` object in the `accepts` array contains:
 
-| Field Name          | Type     | Required | Description                                                                   |
-| ------------------- | -------- | -------- | ----------------------------------------------------------------------------- |
-| `scheme`            | `string` | Required | Payment scheme identifier (e.g., "exact")                                     |
-| `network`           | `string` | Required | Blockchain network identifier in CAIP-2 format (e.g., "eip155:84532")         |
-| `amount`            | `string` | Required | Required payment amount in atomic token units                                 |
+| Field Name          | Type     | Required | Description                                                                                                               |
+| ------------------- | -------- | -------- |---------------------------------------------------------------------------------------------------------------------------|
+| `scheme`            | `string` | Required | Payment scheme identifier (e.g., "exact")                                                                                 |
+| `network`           | `string` | Required | Blockchain network identifier in CAIP-2 format (e.g., "eip155:84532")                                                     |
+| `amount`            | `string` | Required | Required payment amount in atomic token units                                                                             |
 | `asset`             | `string` | Required | Token contract address or ISO 4217 currency code for fiat     |
-| `payTo`             | `string` | Required | Recipient wallet address or role constant (e.g., "merchant")                  |
-| `maxTimeoutSeconds` | `number` | Required | Maximum time allowed for payment completion                                   |
-| `extra`             | `object` | Optional | Scheme-specific additional information                                        |
+| `payTo`             | `string` | Required | Recipient wallet address or role constant (e.g., "merchant")                                                              |
+| `maxTimeoutSeconds` | `number` | Required | Maximum time allowed for payment completion                                                                               |
+| `extra`             | `object` | Optional | Scheme-specific additional information                                                                                    |
 
 The `ResourceInfo` object contains:
 
-| Field Name    | Type     | Required | Description                                |
-| ------------- | -------- | -------- | ------------------------------------------ |
-| `url`         | `string` | Required | URL of the protected resource              |
-| `description` | `string` | Optional | Human-readable description of the resource |
-| `mimeType`    | `string` | Optional | MIME type of the expected response         |
+| Field Name      | Type            | Required | Description                                                                                                          |
+| --------------- | --------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `url`           | `string`        | Required | URL of the protected resource                                                                                        |
+| `description`   | `string`        | Optional | Human-readable description of the resource                                                                           |
+| `mimeType`      | `string`        | Optional | MIME type of the expected response                                                                                   |
+| `serviceName`   | `string`        | Optional | Human-readable name of the service hosting the resource. Printable ASCII, max 32 characters.                         |
+| `tags`          | `array[string]` | Optional | Topical tags for the service, used for discovery filtering. Max 5 entries; each printable ASCII, max 32 characters.  |
+| `iconUrl`       | `string`        | Optional | Absolute `https`/`http` URL to an icon representing the service. Max 2048 characters.                               |
 
 The `Extensions` object is a key-value map where each key is an extension identifier and each value follows a standardized structure:
 
@@ -154,7 +162,7 @@ The client includes payment authorization as JSON in the payment payload field:
     "mimeType": "application/json"
   },
   "accepted": {
-  "scheme": "exact",
+    "scheme": "exact",
     "network": "eip155:84532",
     "amount": "10000",
     "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
@@ -253,6 +261,7 @@ The `VerifyResponse` schema contains the following fields:
 | `isValid`       | `boolean` | Required | Indicates whether the payment authorization is valid    |
 | `invalidReason` | `string`  | Optional | Reason for invalidity (omitted if valid)                |
 | `payer`         | `string`  | Optional | Address of the payer's wallet                           |
+| `extra`         | `object`  | Optional | Scheme-specific additional data                         |
 
 **6. Payment Schemes (The Logic)**
 
@@ -347,7 +356,7 @@ Example with actual data:
       "mimeType": "application/json"
     },
     "accepted": {
-    "scheme": "exact",
+      "scheme": "exact",
       "network": "eip155:84532",
       "amount": "10000",
       "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",

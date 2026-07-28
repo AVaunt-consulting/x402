@@ -31,12 +31,13 @@ import {
   SettleResponse,
   VerifyResponse,
 } from "@x402/core/types";
-import { toFacilitatorEvmSigner } from "@x402/evm";
+import { type AuthorizerSigner, toFacilitatorEvmSigner } from "@x402/evm";
+import { BatchSettlementEvmScheme } from "@x402/evm/batch-settlement/facilitator";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { UptoEvmScheme } from "@x402/evm/upto/facilitator";
 import { ExactEvmSchemeV1 } from "@x402/evm/exact/v1/facilitator";
 import { NETWORKS as EVM_V1_NETWORKS } from "@x402/evm/v1";
-import { BAZAAR, extractDiscoveryInfo } from "@x402/extensions/bazaar";
+import { BAZAAR, extractDiscoveryInfo, type DiscoveryResource } from "@x402/extensions/bazaar";
 import {
   EIP2612_GAS_SPONSORING,
   createErc20ApprovalGasSponsoringExtension,
@@ -48,6 +49,7 @@ import {
   createHederaClient,
   createHederaPreflightTransfer,
   createHederaSignAndSubmitTransaction,
+  createHederaVerifyPayerSignature,
   toFacilitatorHederaSigner,
 } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/facilitator";
@@ -59,17 +61,40 @@ import {
   createEd25519Signer,
   type FacilitatorStellarSigner,
 } from "@x402/stellar";
+import { toFacilitatorKeetaSigner, KEETA_TESTNET_CAIP2, FacilitatorKeetaSigner } from "@x402/keeta";
+import { ExactKeetaScheme } from "@x402/keeta/exact/facilitator";
 import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
+import {
+  CONCORDIUM_TESTNET_CAIP2,
+  getConcordiumGrpcUrl,
+  parseGrpcUrl,
+  toConcordiumFacilitatorSigner,
+} from "@x402/concordium";
+import { ExactConcordiumScheme } from "@x402/concordium/exact/facilitator";
+import {
+  HighloadV3Config,
+  toFacilitatorTvmSigner,
+  TVM_PROVIDER_TONAPI,
+  TVM_PROVIDER_TONCENTER,
+  type FacilitatorHighloadV3Signer,
+} from "@x402/tvm";
+import { ExactTvmScheme } from "@x402/tvm/exact/facilitator";
+import { createFacilitatorNearSigner, type FacilitatorNearSignerConfig } from "@x402/near";
+import { ExactNearScheme as ExactNearFacilitatorScheme } from "@x402/near/exact/facilitator";
+import { ExactXrplScheme as ExactXrplFacilitatorScheme } from "@x402/xrpl/exact/facilitator";
+import * as KeetaNet from "@keetanetwork/keetanet-client";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import express from "express";
 import {
   createWalletClient,
   http,
+  nonceManager,
   publicActions,
   Chain,
   parseTransaction,
   recoverTransactionAddress,
+  type TransactionSerialized,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia, base } from "viem/chains";
@@ -85,15 +110,25 @@ const SVM_NETWORK =
 const APTOS_NETWORK = process.env.APTOS_NETWORK || "aptos:2";
 const AVM_NETWORK =
   process.env.AVM_NETWORK ||
-  "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=";
+  "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDe";
 const HEDERA_NETWORK = process.env.HEDERA_NETWORK || "hedera:testnet";
+const KEETA_NETWORK = process.env.KEETA_NETWORK || KEETA_TESTNET_CAIP2;
 const STELLAR_NETWORK = process.env.STELLAR_NETWORK || "stellar:testnet";
+const TVM_NETWORK = process.env.TVM_NETWORK || "tvm:-3";
+const NEAR_NETWORK = process.env.NEAR_NETWORK || "near:testnet";
+const NEAR_RPC_URL = process.env.NEAR_RPC_URL;
+const XRPL_NETWORK = process.env.XRPL_NETWORK || "xrpl:1";
+const XRPL_WS_URL = process.env.XRPL_WS_URL;
+const CCD_NETWORK = process.env.CCD_NETWORK || CONCORDIUM_TESTNET_CAIP2;
+const CCD_GRPC_URL =
+  process.env.CCD_GRPC_URL || getConcordiumGrpcUrl(CCD_NETWORK as Network);
 const EVM_RPC_URL = process.env.EVM_RPC_URL;
 const SVM_RPC_URL = process.env.SVM_RPC_URL;
 const AVM_RPC_URL = process.env.AVM_RPC_URL;
 const APTOS_RPC_URL = process.env.APTOS_RPC_URL;
 const HEDERA_NODE_URL = process.env.HEDERA_NODE_URL;
 const STELLAR_RPC_URL = process.env.STELLAR_RPC_URL;
+const TVM_PROVIDER = (process.env.TVM_PROVIDER || TVM_PROVIDER_TONCENTER).toLowerCase();
 
 // Map CAIP-2 network IDs to viem chains
 function getEvmChain(network: string): Chain {
@@ -111,13 +146,18 @@ console.log(`🌐 SVM Network: ${SVM_NETWORK}`);
 console.log(`🌐 Aptos Network: ${APTOS_NETWORK}`);
 console.log(`🌐 AVM Network: ${AVM_NETWORK}`);
 console.log(`🌐 Hedera Network: ${HEDERA_NETWORK}`);
+console.log(`🌐 Keeta Network: ${KEETA_NETWORK}`);
 console.log(`🌐 Stellar Network: ${STELLAR_NETWORK}`);
+console.log(`🌐 TVM Network: ${TVM_NETWORK}`);
+console.log(`🌐 CCD Network: ${CCD_NETWORK}`);
+console.log(`🌐 CCD gRPC URL: ${CCD_GRPC_URL}`);
 if (EVM_RPC_URL) console.log(`🌐 EVM RPC URL: ${EVM_RPC_URL}`);
 if (SVM_RPC_URL) console.log(`🌐 SVM RPC URL: ${SVM_RPC_URL}`);
 if (AVM_RPC_URL) console.log(`🌐 AVM RPC URL: ${AVM_RPC_URL}`);
 if (APTOS_RPC_URL) console.log(`🌐 Aptos RPC URL: ${APTOS_RPC_URL}`);
 if (HEDERA_NODE_URL) console.log(`🌐 Hedera Node URL: ${HEDERA_NODE_URL}`);
 if (STELLAR_RPC_URL) console.log(`🌐 Stellar RPC URL: ${STELLAR_RPC_URL}`);
+console.log(`🌐 TVM Provider: ${TVM_PROVIDER}`);
 
 // Validate required environment variables
 if (!process.env.EVM_PRIVATE_KEY) {
@@ -133,8 +173,24 @@ if (!process.env.SVM_PRIVATE_KEY) {
 // Initialize the EVM account from private key
 const evmAccount = privateKeyToAccount(
   process.env.EVM_PRIVATE_KEY as `0x${string}`,
+  { nonceManager },
 );
 console.info(`EVM Facilitator account: ${evmAccount.address}`);
+
+// Dedicated receiver authorizer for the batch-settlement scheme (falls back to EVM_PRIVATE_KEY)
+const receiverAuthorizerPrivateKey =
+  process.env.EVM_RECEIVER_AUTHORIZER_PRIVATE_KEY ?? process.env.EVM_PRIVATE_KEY;
+const authorizerAccount = privateKeyToAccount(
+  receiverAuthorizerPrivateKey as `0x${string}`,
+);
+const authorizerSigner: AuthorizerSigner = {
+  address: authorizerAccount.address,
+  signTypedData: (params) =>
+    authorizerAccount.signTypedData(
+      params as Parameters<typeof authorizerAccount.signTypedData>[0],
+    ),
+};
+console.info(`EVM Receiver Authorizer: ${authorizerSigner.address}`);
 
 // Initialize the SVM account from private key
 const svmAccount = await createKeyPairSignerFromBytes(
@@ -183,9 +239,20 @@ if (process.env.HEDERA_ACCOUNT_ID && process.env.HEDERA_PRIVATE_KEY) {
       buildHederaClient,
       hederaKey,
     ),
-    preflightTransfer: createHederaPreflightTransfer(buildHederaClient),
+    verifyPayerSignature: createHederaVerifyPayerSignature(),
+    preflightTransfer: createHederaPreflightTransfer(),
   });
   console.info(`Hedera Facilitator account: ${hederaAccountId}`);
+}
+
+let keetaSigner: FacilitatorKeetaSigner | undefined;
+if (process.env.KEETA_FACILITATOR_MNEMONIC) {
+  const keetaAccount = KeetaNet.lib.Account.fromSeed(
+    await KeetaNet.lib.Account.seedFromPassphrase(process.env.KEETA_FACILITATOR_MNEMONIC),
+    0,
+  );
+  console.info(`Keeta Facilitator account: ${keetaAccount.publicKeyString.toString()}`);
+  keetaSigner = toFacilitatorKeetaSigner([keetaAccount]);
 }
 
 // Initialize the Stellar signer from private key (optional)
@@ -196,6 +263,51 @@ if (process.env.STELLAR_PRIVATE_KEY) {
     STELLAR_NETWORK as Network,
   );
   console.info(`Stellar Facilitator account: ${stellarSigner.address}`);
+}
+
+// Initialize the TVM highload signer from private key (optional)
+let tvmSigner: FacilitatorHighloadV3Signer | undefined;
+if (process.env.TVM_PRIVATE_KEY) {
+  const tvmConfig = HighloadV3Config.fromPrivateKey(process.env.TVM_PRIVATE_KEY, {
+    provider: TVM_PROVIDER,
+    apiKey:
+      TVM_PROVIDER === TVM_PROVIDER_TONAPI
+        ? process.env.TONAPI_API_KEY
+        : process.env.TONCENTER_API_KEY,
+    providerBaseUrl:
+      TVM_PROVIDER === TVM_PROVIDER_TONAPI
+        ? process.env.TONAPI_BASE_URL
+        : process.env.TONCENTER_BASE_URL,
+  });
+  tvmSigner = toFacilitatorTvmSigner({ [TVM_NETWORK]: tvmConfig });
+  console.info(`TVM Facilitator account: ${tvmSigner.getAddressesForNetwork(TVM_NETWORK)[0]}`);
+}
+
+// Initialize the NEAR facilitator (relayer) signer from account + key (optional)
+let nearSigner: ReturnType<typeof createFacilitatorNearSigner> | undefined;
+if (process.env.NEAR_RELAYER_ACCOUNT_ID && process.env.NEAR_RELAYER_PRIVATE_KEY) {
+  nearSigner = createFacilitatorNearSigner({
+    relayers: [
+      {
+        accountId: process.env.NEAR_RELAYER_ACCOUNT_ID,
+        secretKey: process.env
+          .NEAR_RELAYER_PRIVATE_KEY as FacilitatorNearSignerConfig["relayers"][number]["secretKey"],
+      },
+    ],
+    rpcUrls: NEAR_RPC_URL ? { [NEAR_NETWORK]: NEAR_RPC_URL } : undefined,
+  });
+  console.info(`NEAR Facilitator relayer: ${process.env.NEAR_RELAYER_ACCOUNT_ID}`);
+}
+
+let concordiumSigner: ReturnType<typeof toConcordiumFacilitatorSigner> | undefined;
+if (process.env.CCD_FACILITATOR_PRIVATE_KEY && process.env.CCD_FACILITATOR_ADDRESS) {
+  const [host, port] = parseGrpcUrl(CCD_GRPC_URL);
+  concordiumSigner = toConcordiumFacilitatorSigner(
+    process.env.CCD_FACILITATOR_ADDRESS,
+    process.env.CCD_FACILITATOR_PRIVATE_KEY,
+    { host, port, useTls: true },
+  );
+  console.info(`CCD Facilitator account: ${process.env.CCD_FACILITATOR_ADDRESS} on ${CCD_NETWORK} (private key)`);
 }
 
 // Create a Viem client with both wallet and public capabilities
@@ -258,9 +370,9 @@ const svmSigner = toFacilitatorSvmSigner(
 // Pass custom RPC URL if provided
 const aptosSigner = aptosAccount
   ? toFacilitatorAptosSigner(
-      aptosAccount,
-      APTOS_RPC_URL ? { defaultRpcUrl: APTOS_RPC_URL } : undefined,
-    )
+    aptosAccount,
+    APTOS_RPC_URL ? { defaultRpcUrl: APTOS_RPC_URL } : undefined,
+  )
   : undefined;
 
 const verifiedPayments = new Map<string, number>();
@@ -273,14 +385,144 @@ function createPaymentHash(paymentPayload: PaymentPayload): string {
     .digest("hex");
 }
 
+function isBatchSettlementScheme(requirements: PaymentRequirements): boolean {
+  return requirements.scheme === "batch-settlement";
+}
+
+// For batch-settlement payloads the action lives at payload.payload.type
+// (deposit / voucher) or payload.payload.settleAction (claimWithSignature /
+// settle / refundWithSignature). Used by onAfterSettle to detect deposits.
+function extractPayloadAction(paymentPayload: PaymentPayload): string {
+  const inner = paymentPayload.payload as Record<string, unknown> | undefined;
+  if (!inner || typeof inner !== "object") {
+    return "n/a";
+  }
+  if (typeof inner.type === "string") {
+    return inner.type;
+  }
+  if (typeof inner.settleAction === "string") {
+    return inner.settleAction;
+  }
+  return "n/a";
+}
+
+// Minimal ABI fragment for reading channel state from the BatchSettlement contract
+const BATCH_SETTLEMENT_ADDRESS = "0x4020e07E964De72a79367828c9C6140fcaE00003" as const;
+const channelsAbi = [
+  {
+    type: "function",
+    name: "channels",
+    stateMutability: "view",
+    inputs: [{ name: "channelId", type: "bytes32" }],
+    outputs: [
+      { name: "balance", type: "uint256" },
+      { name: "totalClaimed", type: "uint256" },
+    ],
+  },
+] as const;
+
+async function readChannelBalance(channelId: `0x${string}`): Promise<bigint> {
+  const result = (await viemClient.readContract({
+    address: BATCH_SETTLEMENT_ADDRESS,
+    abi: channelsAbi,
+    functionName: "channels",
+    args: [channelId],
+  })) as readonly [bigint, bigint];
+  return result[0];
+}
+
+// Avoid stale state after a deposit is mined
+async function waitForChannelDepositConfirmed(
+  channelId: `0x${string}`,
+  expectedMinBalance: bigint,
+  options: { initialDelayMs?: number; maxDelayMs?: number; timeoutMs?: number } = {},
+): Promise<void> {
+  const initialDelayMs = options.initialDelayMs ?? 250;
+  const maxDelayMs = options.maxDelayMs ?? 4_000;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+
+  const startedAt = Date.now();
+  let delayMs = initialDelayMs;
+  let attempt = 0;
+  let lastBalance = 0n;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    try {
+      lastBalance = await readChannelBalance(channelId);
+    } catch (err) {
+      console.warn(
+        `⏳ deposit confirm: read failed on attempt ${attempt} for channel ${channelId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (lastBalance >= expectedMinBalance) {
+      console.log(
+        `⏳ deposit confirm: channel ${channelId} balance=${lastBalance} (>= ${expectedMinBalance}) after ${attempt} attempt(s) in ${Date.now() - startedAt}ms`,
+      );
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    delayMs = Math.min(delayMs * 2, maxDelayMs);
+  }
+
+  throw new Error(
+    `deposit_confirm_timeout: channel ${channelId} balance=${lastBalance} (< ${expectedMinBalance}) after ${attempt} attempt(s) in ${Date.now() - startedAt}ms`,
+  );
+}
+
+async function waitForBatchSettlementDepositConfirmed(
+  extra: Record<string, unknown> | undefined,
+): Promise<void> {
+  const channelId = typeof extra?.channelId === "string" ? (extra.channelId as `0x${string}`) : undefined;
+  const balanceStr = typeof extra?.balance === "string" ? extra.balance : undefined;
+
+  if (!channelId || !balanceStr) {
+    console.warn(
+      "⏳ deposit confirm: settle response missing channelId/balance, skipping on-chain wait",
+    );
+    return;
+  }
+
+  let expectedMinBalance: bigint;
+  try {
+    expectedMinBalance = BigInt(balanceStr);
+  } catch {
+    console.warn(`⏳ deposit confirm: unparseable balance ${balanceStr}, skipping wait`);
+    return;
+  }
+
+  if (expectedMinBalance === 0n) {
+    return;
+  }
+
+  try {
+    await waitForChannelDepositConfirmed(channelId, expectedMinBalance);
+  } catch (err) {
+    console.error(
+      `⏳ deposit confirm: ${err instanceof Error ? err.message : String(err)} — proceeding anyway`,
+    );
+  }
+}
+
 const facilitator = new x402Facilitator();
 
 // Register EVM, SVM, Aptos, and Hedera schemes (v2 + v1 where applicable)
 facilitator
   .register(EVM_NETWORK as Network, new ExactEvmScheme(evmSigner))
   .register(EVM_NETWORK as Network, new UptoEvmScheme(evmSigner))
+  .register(
+    EVM_NETWORK as Network,
+    new BatchSettlementEvmScheme(evmSigner, authorizerSigner),
+  )
   .registerV1(EVM_V1_NETWORKS as Network[], new ExactEvmSchemeV1(evmSigner))
-  .register(SVM_NETWORK as Network, new ExactSvmScheme(svmSigner))
+  .register(
+    SVM_NETWORK as Network,
+    new ExactSvmScheme(svmSigner, undefined, {
+      enableSmartWalletVerification: true,
+    }),
+  )
   .registerV1(SVM_V1_NETWORKS as Network[], new ExactSvmSchemeV1(svmSigner));
 if (avmSigner) {
   facilitator.register(AVM_NETWORK as Network, new ExactAvmScheme(avmSigner));
@@ -297,26 +539,37 @@ if (hederaSigner) {
     new ExactHederaScheme(hederaSigner),
   );
 }
+if (keetaSigner) {
+  facilitator.register(KEETA_NETWORK as Network, new ExactKeetaScheme(keetaSigner, console));
+}
 if (stellarSigner) {
   facilitator.register(
     STELLAR_NETWORK as Network,
     new ExactStellarScheme([stellarSigner]),
   );
 }
+if (tvmSigner) {
+  facilitator.register(TVM_NETWORK as Network, new ExactTvmScheme(tvmSigner));
+}
+if (nearSigner) {
+  facilitator.register(NEAR_NETWORK as Network, new ExactNearFacilitatorScheme(nearSigner));
+}
+if (process.env.XRPL_NETWORK) {
+  facilitator.register(
+    XRPL_NETWORK as Network,
+    new ExactXrplFacilitatorScheme(
+      XRPL_WS_URL ? { wsUrlByNetwork: { [XRPL_NETWORK as `xrpl:${number}`]: XRPL_WS_URL } } : {},
+    ),
+  );
+  console.info(`XRPL facilitator enabled on ${XRPL_NETWORK} (payer-signed; no facilitator signer)`);
+}
+if (concordiumSigner) {
+  facilitator.register(
+    CCD_NETWORK as Network,
+    new ExactConcordiumScheme({ signer: concordiumSigner }),
+  );
+}
 
-const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
-const erc20AllowanceAbi = [
-  {
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "spender", type: "address" },
-    ],
-    name: "allowance",
-    outputs: [{ name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-] as const;
 
 const erc20ApprovalSigner = {
   ...evmSigner,
@@ -333,7 +586,7 @@ const erc20ApprovalSigner = {
         // Parse the raw tx to extract sender and gas params for potential gas funding
         const parsed = parseTransaction(tx);
         const payerAddress = await recoverTransactionAddress({
-          serializedTransaction: tx,
+          serializedTransaction: tx as TransactionSerialized,
         });
         const gas = parsed.gas ?? 70_000n;
         const maxFeePerGas = parsed.maxFeePerGas ?? 1_000_000_000n;
@@ -391,13 +644,13 @@ facilitator
       verifiedPayments.set(paymentHash, Date.now());
 
       // Hook 2: Extract and catalog bazaar discovery info
-      const discovered = extractDiscoveryInfo(
-        context.paymentPayload,
-        context.requirements,
-      );
-      if (discovered) {
-        const action =
-          "method" in discovered ? discovered.method : discovered.toolName;
+        const discovered = extractDiscoveryInfo(
+          context.paymentPayload,
+          context.requirements,
+        );
+        if (discovered) {
+          const action =
+            "toolName" in discovered ? discovered.toolName : discovered.method;
         if (!action) {
           return;
         }
@@ -410,20 +663,30 @@ facilitator
         ) {
           resourceUrl = `mcp://tool/${discovered.toolName}`;
         }
-        bazaarCatalog.catalogResource(
-          resourceUrl,
-          action,
-          discovered.x402Version,
-          discovered.discoveryInfo,
-          context.requirements,
-          discovered.routeTemplate,
-        );
+        const catalogEntry: DiscoveryResource = {
+          resource: resourceUrl,
+          type: discovered.discoveryInfo.input.type,
+          x402Version: discovered.x402Version,
+          accepts: [context.requirements],
+          lastUpdated: new Date().toISOString(),
+          description: discovered.description,
+          mimeType: discovered.mimeType,
+          serviceName: discovered.serviceName,
+          tags: discovered.tags,
+          iconUrl: discovered.iconUrl,
+          extensions: discovered.extensions,
+        };
+        bazaarCatalog.add(catalogEntry);
         console.log(`📦 Discovered resource: ${action} ${resourceUrl}`);
       }
     }
   })
   .onBeforeSettle(async (context) => {
     // Hook 3: Validate payment was previously verified
+    if (isBatchSettlementScheme(context.requirements)) {
+      return;
+    }
+
     const paymentHash = createPaymentHash(context.paymentPayload);
     const verificationTimestamp = verifiedPayments.get(paymentHash);
 
@@ -446,17 +709,30 @@ facilitator
   })
   .onAfterSettle(async (context) => {
     // Hook 4: Clean up verified payment tracking after settlement
-    const paymentHash = createPaymentHash(context.paymentPayload);
-    verifiedPayments.delete(paymentHash);
+    if (!isBatchSettlementScheme(context.requirements)) {
+      const paymentHash = createPaymentHash(context.paymentPayload);
+      verifiedPayments.delete(paymentHash);
+    }
 
     if (context.result.success) {
       console.log(`✅ Settlement completed: ${context.result.transaction}`);
     }
+
+    // For batch-settlement deposits, wait for the deposit to be confirmed onchain
+    if (
+      isBatchSettlementScheme(context.requirements) &&
+      context.result.success &&
+      extractPayloadAction(context.paymentPayload) === "deposit"
+    ) {
+      await waitForBatchSettlementDepositConfirmed(context.result.extra);
+    }
   })
   .onSettleFailure(async (context) => {
     // Hook 5: Clean up on settlement failure too
-    const paymentHash = createPaymentHash(context.paymentPayload);
-    verifiedPayments.delete(paymentHash);
+    if (!isBatchSettlementScheme(context.requirements)) {
+      const paymentHash = createPaymentHash(context.paymentPayload);
+      verifiedPayments.delete(paymentHash);
+    }
 
     console.error(`❌ Settlement failed: ${context.error.message}`);
   });
@@ -613,7 +889,11 @@ app.get("/health", (req, res) => {
     avmNetwork: avmSigner ? AVM_NETWORK : "(not configured)",
     aptosNetwork: aptosAccount ? APTOS_NETWORK : "(not configured)",
     hederaNetwork: hederaSigner ? HEDERA_NETWORK : "(not configured)",
+    keetaNetwork: process.env.KEETA_FACILITATOR_MNEMONIC ? KEETA_NETWORK : "(not configured)",
     stellarNetwork: stellarSigner ? STELLAR_NETWORK : "(not configured)",
+    nearNetwork: nearSigner ? NEAR_NETWORK : "(not configured)",
+    xrplNetwork: process.env.XRPL_NETWORK ? XRPL_NETWORK : "(not configured)",
+    ccdNetwork: concordiumSigner ? CCD_NETWORK : "(not configured)",
     facilitator: "typescript",
     version: "2.0.0",
     extensions: [BAZAAR.key],
@@ -630,13 +910,14 @@ app.post("/close", (req, res) => {
   console.log("Received shutdown request");
 
   // Give time for response to be sent
-  setTimeout(() => {
+  setTimeout(async () => {
+    await keetaSigner?.destroy();
     process.exit(0);
   }, 100);
 });
 
 // Start the server
-app.listen(parseInt(PORT), () => {
+let server = app.listen(parseInt(PORT), () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
 ║           x402 TypeScript Facilitator                  ║
@@ -647,11 +928,18 @@ app.listen(parseInt(PORT), () => {
 ║  AVM Network:  ${AVM_NETWORK}                          ║
 ║  Aptos Network: ${APTOS_NETWORK}                       ║
 ║  Hedera Network: ${HEDERA_NETWORK}                     ║
+║  Keeta Network: ${KEETA_NETWORK}                       ║
+║  NEAR Network: ${NEAR_NETWORK}                         ║
+║  XRPL Network: ${XRPL_NETWORK}                         ║
+║  CCD Network:  ${CCD_NETWORK}                          ║
 ║  EVM Address:  ${evmAccount.address}                   ║
 ║  AVM Address:  ${avmSigner ? avmSigner.getAddresses()[0] : "(not configured)"}
 ║  Aptos Address: ${aptosAccount ? aptosAccount.accountAddress.toStringLong().slice(0, 20) + "..." : "(not configured)"}
 ║  Hedera Address: ${process.env.HEDERA_ACCOUNT_ID || "(not configured)"} ║
+║  Keeta Address: ${keetaSigner?.getAddresses()[0] || "(not configured)"} ║
 ║  Stellar Address: ${stellarSigner ? stellarSigner.address : "(not configured)"} ║
+║  NEAR Address: ${process.env.NEAR_RELAYER_ACCOUNT_ID || "(not configured)"} ║
+║  CCD Address:  ${concordiumSigner ? concordiumSigner.getAddress() : "(not configured)"} ║
 ║  Extensions:   bazaar                                  ║
 ║                                                        ║
 ║  Endpoints:                                            ║
@@ -667,3 +955,14 @@ app.listen(parseInt(PORT), () => {
   // Log that facilitator is ready (needed for e2e test discovery)
   console.log("Facilitator listening");
 });
+
+if (keetaSigner) {
+  const shutdown = async () => {
+    server.close(async () => {
+      await keetaSigner.destroy();
+      process.exit(0);
+    });
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}

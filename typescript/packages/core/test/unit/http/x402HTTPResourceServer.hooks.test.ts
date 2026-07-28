@@ -329,6 +329,60 @@ describe("x402HTTPResourceServer Hooks", () => {
         expect(receivedContext?.transportContext).toEqual(transportContext);
       });
 
+      it("should merge nested scheme settlement response enrichment", async () => {
+        const schemeWithEnrichment = extensionMockScheme as MockSchemeNetworkServer & {
+          enrichSettlementResponse: () => Promise<Record<string, unknown>>;
+        };
+        schemeWithEnrichment.enrichSettlementResponse = async () => ({
+          chargedAmount: "1000",
+          channelState: {
+            chargedCumulativeAmount: "1000",
+          },
+        });
+
+        const routes = {
+          "/api/test": {
+            accepts: {
+              scheme: "exact",
+              payTo: "0xabc",
+              price: "$1.00" as Price,
+              network: "eip155:8453" as Network,
+            },
+          },
+        };
+        const httpServer = new x402HTTPResourceServer(extensionResourceServer, routes);
+        const payload = buildPaymentPayload();
+        const requirements = buildPaymentRequirements({
+          scheme: "exact",
+          network: "eip155:8453" as Network,
+        });
+
+        extensionMockFacilitator.setSettleResponse(
+          buildSettleResponse({
+            success: true,
+            network: "eip155:8453" as Network,
+            extra: {
+              channelState: {
+                channelId: "0xchannel",
+                balance: "10000",
+              },
+            },
+          }),
+        );
+
+        const result = await httpServer.processSettlement(payload, requirements);
+
+        expect(result.success).toBe(true);
+        expect(result.extra).toEqual({
+          chargedAmount: "1000",
+          channelState: {
+            channelId: "0xchannel",
+            balance: "10000",
+            chargedCumulativeAmount: "1000",
+          },
+        });
+      });
+
       it("should have undefined transportContext when not provided", async () => {
         let receivedContext: SettleResultContext | undefined;
 
@@ -937,6 +991,100 @@ describe("x402HTTPResourceServer Hooks", () => {
         expect(hook2).toHaveBeenCalled();
         expect(hook3).toHaveBeenCalled();
         expect(result.type).toBe("no-payment-required");
+      });
+    });
+
+    describe("extension transport hooks", () => {
+      it("runs declared extension hooks after manual hooks", async () => {
+        const order: string[] = [];
+        const routes = {
+          "/api/protected": {
+            ...testRoutes["/api/protected"],
+            extensions: {
+              "http-extension": { enabled: true },
+            },
+          },
+        };
+        ResourceServer.registerExtension({
+          key: "http-extension",
+          transportHooks: {
+            http: {
+              onProtectedRequest: async declaration => {
+                order.push("extension");
+                expect(declaration).toEqual({ enabled: true });
+                return { grantAccess: true };
+              },
+            },
+          },
+        });
+
+        const httpServer = new x402HTTPResourceServer(ResourceServer, routes);
+        httpServer.onProtectedRequest(async () => {
+          order.push("manual");
+        });
+
+        const result = await httpServer.processHTTPRequest({
+          adapter: new MockHTTPAdapter(),
+          path: "/api/protected",
+          method: "GET",
+        });
+
+        expect(result.type).toBe("no-payment-required");
+        expect(order).toEqual(["manual", "extension"]);
+      });
+
+      it("skips extension hooks when the route does not declare the extension", async () => {
+        const hook = vi.fn();
+        ResourceServer.registerExtension({
+          key: "http-extension",
+          transportHooks: {
+            http: {
+              onProtectedRequest: hook,
+            },
+          },
+        });
+
+        const httpServer = new x402HTTPResourceServer(ResourceServer, testRoutes);
+        const result = await httpServer.processHTTPRequest({
+          adapter: new MockHTTPAdapter(),
+          path: "/api/protected",
+          method: "GET",
+        });
+
+        expect(hook).not.toHaveBeenCalled();
+        expect(result.type).toBe("payment-error");
+      });
+
+      it("returns 403 when a declared extension hook aborts", async () => {
+        const routes = {
+          "/api/protected": {
+            ...testRoutes["/api/protected"],
+            extensions: {
+              "http-extension": {},
+            },
+          },
+        };
+        ResourceServer.registerExtension({
+          key: "http-extension",
+          transportHooks: {
+            http: {
+              onProtectedRequest: async () => ({ abort: true, reason: "blocked by extension" }),
+            },
+          },
+        });
+
+        const httpServer = new x402HTTPResourceServer(ResourceServer, routes);
+        const result = await httpServer.processHTTPRequest({
+          adapter: new MockHTTPAdapter(),
+          path: "/api/protected",
+          method: "GET",
+        });
+
+        expect(result.type).toBe("payment-error");
+        if (result.type === "payment-error") {
+          expect(result.response.status).toBe(403);
+          expect(result.response.body).toEqual({ error: "blocked by extension" });
+        }
       });
     });
 

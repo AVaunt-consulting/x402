@@ -7,7 +7,14 @@ import type {
   VerifyFailureContext,
   SettleContext,
   SettleFailureContext,
+  VerifiedPaymentCanceledContext,
+  SkipHandlerDirective,
 } from "../server/x402ResourceServer";
+import type { ResourceServerTransportExtensionHooks } from "../http/x402HTTPResourceServer";
+export type {
+  HTTPResourceServerExtensionHooks,
+  ResourceServerTransportExtensionHooks,
+} from "../http/x402HTTPResourceServer";
 
 export type {
   PaymentRequiredContext,
@@ -17,6 +24,7 @@ export type {
   VerifyFailureContext,
   SettleContext,
   SettleFailureContext,
+  VerifiedPaymentCanceledContext,
 };
 
 export interface FacilitatorExtension {
@@ -31,8 +39,19 @@ export interface ResourceServerExtensionHooks {
   onBeforeVerify?: (
     declaration: unknown,
     context: VerifyContext,
-  ) => Promise<void | { abort: true; reason: string; message?: string }>;
-  onAfterVerify?: (declaration: unknown, context: VerifyResultContext) => Promise<void>;
+  ) => Promise<
+    | void
+    | { abort: true; reason: string; message?: string }
+    | { skip: true; result: VerifyResponse }
+  >;
+  onAfterVerify?: (
+    declaration: unknown,
+    context: VerifyResultContext,
+  ) => Promise<
+    | void
+    | { skipHandler: true; response?: SkipHandlerDirective }
+    | { abort: true; reason: string; message?: string }
+  >;
   onVerifyFailure?: (
     declaration: unknown,
     context: VerifyFailureContext,
@@ -40,16 +59,31 @@ export interface ResourceServerExtensionHooks {
   onBeforeSettle?: (
     declaration: unknown,
     context: SettleContext,
-  ) => Promise<void | { abort: true; reason: string; message?: string }>;
+  ) => Promise<
+    | void
+    | { abort: true; reason: string; message?: string }
+    | { skip: true; result: SettleResponse }
+  >;
   onAfterSettle?: (declaration: unknown, context: SettleResultContext) => Promise<void>;
   onSettleFailure?: (
     declaration: unknown,
     context: SettleFailureContext,
   ) => Promise<void | { recovered: true; result: SettleResponse }>;
+  onVerifiedPaymentCanceled?: (
+    declaration: unknown,
+    context: VerifiedPaymentCanceledContext,
+  ) => Promise<void>;
 }
 
 export interface ResourceServerExtension {
   key: string;
+  /**
+   * Names of fields under the extension's `info` that are dynamic - regenerated
+   * on every PaymentRequired response (e.g. nonces, timestamps) - rather than
+   * static committed terms. Dynamic fields are excluded from client echo
+   * validation. Defaults to none (all info fields treated as static / strict).
+   */
+  dynamicInfoFields?: string[];
   enrichDeclaration?: (declaration: unknown, transportContext: unknown) => unknown;
   /**
    * Return value merges into `extensions[key]`. In-place edits to `accepts` are allowlisted only
@@ -71,4 +105,6 @@ export interface ResourceServerExtension {
   ) => Promise<unknown>;
   /** Installed on `registerExtension`; runs only when `declaredExtensions[key]` is defined. */
   hooks?: ResourceServerExtensionHooks;
+  /** Transport-specific hooks scoped to declared extension keys. */
+  transportHooks?: ResourceServerTransportExtensionHooks;
 }
