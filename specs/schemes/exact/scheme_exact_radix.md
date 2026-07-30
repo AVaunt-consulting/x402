@@ -70,6 +70,8 @@ The `extra` field MUST include:
 - `extra.intentDiscriminator`: A string-encoded `u64` value. The client MUST set `IntentHeaderV2.intent_discriminator` to this value when constructing the subintent (sponsored) or transaction (non-sponsored). This allows the facilitator to control intent uniqueness for replay protection and correlation.
 
 > **Retry behavior:** If a client retries after a failed request, the new `PaymentRequirements` will contain a fresh `intentDiscriminator`; the client MUST rebuild and re-sign the subintent or transaction with the new value.
+>
+> **Double-commit caution:** A rebuilt intent is a *new* intent — the Radix ledger's single-commit guarantee applies per intent hash, so a rebuilt payload and its predecessor could **both** commit if the predecessor was already submitted and is still within its validity window. Resource servers MUST NOT issue a fresh `intentDiscriminator` for a payment whose previous payload may still be pending; they SHOULD only do so if the previous payload was never submitted, was permanently rejected, or its `max_proposer_timestamp_exclusive` has passed.
 
 **Example (sponsored):**
 
@@ -83,7 +85,7 @@ The `extra` field MUST include:
   "maxTimeoutSeconds": 60,
   "extra": {
     "mode": "sponsored",
-    "notaryBadge": "resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxx3e2cpa:[b24ed95ab09b486b64c1bf2eb2b39f8cb57cb6cff8a83f034730f457d4e06173]",
+    "notaryBadge": "resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxxed25sg:[5ab09b486b64c1bf2eb2b39f8cb57cb6cff8a83f034730f457d4e06173]",
     "intentDiscriminator": "8374029156381940237"
   }
 }
@@ -146,7 +148,7 @@ All bech32m-encoded addresses (resource, account, component, transaction-intent 
     "maxTimeoutSeconds": 60,
     "extra": {
       "mode": "sponsored",
-      "notaryBadge": "resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxx3e2cpa:[b24ed95ab09b486b64c1bf2eb2b39f8cb57cb6cff8a83f034730f457d4e06173]",
+      "notaryBadge": "resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxxed25sg:[5ab09b486b64c1bf2eb2b39f8cb57cb6cff8a83f034730f457d4e06173]",
       "intentDiscriminator": "8374029156381940237"
     }
   },
@@ -556,7 +558,7 @@ Additional security considerations (replay attack prevention, trust model, authe
 On Radix, when a key signs a V2 transaction, the engine synthesizes a **virtual signature badge** in the transaction's auth zone. The notary's badge is a `NonFungibleGlobalId` composed of:
 
 1. The well-known **Ed25519 signature virtual badge resource address** (network-specific, see below).
-2. A `NonFungibleLocalId::Bytes(blake2b_256(<public_key_bytes>)[6..])` — the last 26 bytes of the Blake2b-256 hash of the public key.
+2. A `NonFungibleLocalId::Bytes(blake2b_256(<public_key_bytes>)[3..])` — the last 29 bytes of the Blake2b-256 hash of the public key (the same `PublicKeyHash` bytes used in virtual account addresses).
 
 `VERIFY_PARENT` checks that the **parent** transaction's auth zone contains a specified badge. By requiring the facilitator's notary badge, the client ensures only the intended facilitator can consume the subintent.
 
@@ -574,8 +576,8 @@ Clients SHOULD validate that the resource address component of `notaryBadge` mat
 
 | Network | Ed25519 signature badge resource |
 |---|---|
-| Mainnet | `resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxx3e2cpa` |
-| Stokenet | `resource_tdx_2_1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxxed8fma` |
+| Mainnet | `resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxxed25sg` |
+| Stokenet | `resource_tdx_2_1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxx3e2cpa` |
 
 #### Complete 5-instruction subintent example (mainnet)
 
@@ -585,7 +587,7 @@ VERIFY_PARENT
         Enum<CompositeRequirement::BasicRequirement>(
             Enum<BasicRequirement::Require>(
                 Enum<ResourceOrNonFungible::NonFungible>(
-                    NonFungibleGlobalId("resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxx3e2cpa:[b24ed95ab09b486b64c1bf2eb2b39f8cb57cb6cff8a83f034730f457d4e06173]")
+                    NonFungibleGlobalId("resource_rdx1nfxxxxxxxxxxed25sgxxxxxxxxx002236757237xxxxxxxxxed25sg:[5ab09b486b64c1bf2eb2b39f8cb57cb6cff8a83f034730f457d4e06173]")
                 )
             )
         )
@@ -641,15 +643,15 @@ Facilitators MUST reject payloads where `max_proposer_timestamp_exclusive` excee
 
 ### C. Address format table
 
-Radix uses bech32m encoding with network-specific human-readable parts (HRPs):
+Radix addresses are bech32m-encoded. The human-readable part (HRP) is the concatenation of an **entity type prefix** (e.g. `account_`, `resource_`) and the official **network HRP suffix** — `rdx` for mainnet, `tdx_2_` for Stokenet (see [Well-Known Addresses](https://docs.radixdlt.com/docs/well-known-addresses)). The character `1` that follows is the bech32m separator, not part of the HRP.
 
-| Entity | Mainnet HRP | Stokenet HRP |
-|---|---|---|
-| Account | `account_rdx1` | `account_tdx_2_1` |
-| Resource | `resource_rdx1` | `resource_tdx_2_1` |
-| Component | `component_rdx1` | `component_tdx_2_1` |
-| Transaction intent hash | `txid_rdx1` | `txid_tdx_2_1` |
-| Subintent hash | `subtxid_rdx1` | `subtxid_tdx_2_1` |
+| Entity | Mainnet HRP (suffix `rdx`) | Stokenet HRP (suffix `tdx_2_`) | Resulting address prefix (mainnet / stokenet) |
+|---|---|---|---|
+| Account | `account_rdx` | `account_tdx_2_` | `account_rdx1...` / `account_tdx_2_1...` |
+| Resource | `resource_rdx` | `resource_tdx_2_` | `resource_rdx1...` / `resource_tdx_2_1...` |
+| Component | `component_rdx` | `component_tdx_2_` | `component_rdx1...` / `component_tdx_2_1...` |
+| Transaction intent hash | `txid_rdx` | `txid_tdx_2_` | `txid_rdx1...` / `txid_tdx_2_1...` |
+| Subintent hash | `subtxid_rdx` | `subtxid_tdx_2_` | `subtxid_rdx1...` / `subtxid_tdx_2_1...` |
 
 Bech32m is case-insensitive at decode time, but this spec mandates **canonical lowercase** for every encoded value to keep facilitator address comparisons a pure string equality. Mixed-case bech32m strings are not valid bech32m at all (the encoding forbids mixing); uppercase-only strings decode to the same bytes as their lowercase form but are out-of-spec for x402 payloads.
 
@@ -665,6 +667,8 @@ Bech32m is case-insensitive at decode time, but this spec mandates **canonical l
 **Base URLs:**
 - Mainnet: `https://mainnet.radixdlt.com`
 - Stokenet: `https://stokenet.radixdlt.com`
+
+Facilitators running their own Radix node MAY use the equivalent node Core API endpoints (`/core/transaction/*`, `/core/lts/*`) instead of the public Gateway; running a dedicated node is the recommended production setup for high-volume integrators.
 
 ## Recommendation
 
