@@ -643,9 +643,14 @@ Facilitators MUST reject payloads where `max_proposer_timestamp_exclusive` excee
 
 ### C. Address format table
 
-Radix addresses are bech32m-encoded. The human-readable part (HRP) is the concatenation of an **entity type prefix** (e.g. `account_`, `resource_`) and the official **network HRP suffix** — `rdx` for mainnet, `tdx_2_` for Stokenet (see [Well-Known Addresses](https://docs.radixdlt.com/docs/well-known-addresses)). The character `1` that follows is the bech32m separator, not part of the HRP.
+Radix addresses are bech32m-encoded: an HRP, the separator character `1`, and a base32-encoded data part ending in a 6-character checksum computed over the HRP and data. The human-readable part (HRP) is the concatenation of two official specifiers (see [Address Concepts](https://docs.radixdlt.com/docs/concepts)):
 
-| Entity | Mainnet HRP (suffix `rdx`) | Stokenet HRP (suffix `tdx_2_`) | Resulting address prefix (mainnet / stokenet) |
+- **Entity specifier** — the type of entity being addressed, e.g. `account_`, `resource_`, `component_`.
+- **Network specifier** (the `network_hrp_suffix` in [Well-Known Addresses](https://docs.radixdlt.com/docs/well-known-addresses)) — `rdx` for mainnet, `tdx_2_` for Stokenet (generally `tdx_<hex_id>_` for testnets), `sim` for the local simulator.
+
+For entity addresses the data part encodes 30 bytes: 1 entity-type byte followed by the 29 address bytes. Transaction intent hashes (`txid_`) and subintent hashes (`subtxid_`) use the same HRP scheme to encode 32-byte hashes.
+
+| Entity | Mainnet HRP (network specifier `rdx`) | Stokenet HRP (network specifier `tdx_2_`) | Resulting address prefix (mainnet / stokenet) |
 |---|---|---|---|
 | Account | `account_rdx` | `account_tdx_2_` | `account_rdx1...` / `account_tdx_2_1...` |
 | Resource | `resource_rdx` | `resource_tdx_2_` | `resource_rdx1...` / `resource_tdx_2_1...` |
