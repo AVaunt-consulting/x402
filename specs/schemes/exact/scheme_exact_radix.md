@@ -81,7 +81,7 @@ The `extra` field MUST include:
   "network": "radix:mainnet",
   "amount": "10",
   "asset": "resource_rdx1tknxxxxxxxxxradxrdxxxxxxxxx009923554798xxxxxxxxxradxrd",
-  "payTo": "account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehpkf6zh",
+  "payTo": "account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehss5d52",
   "maxTimeoutSeconds": 60,
   "extra": {
     "mode": "sponsored",
@@ -99,7 +99,7 @@ The `extra` field MUST include:
   "network": "radix:stokenet",
   "amount": "25",
   "asset": "resource_tdx_2_1tknxxxxxxxxxradxrdxxxxxxxxx009923554798xxxxxxxxxtfd2jc",
-  "payTo": "account_tdx_2_129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehpkf6zh",
+  "payTo": "account_tdx_2_129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehrlel8s",
   "maxTimeoutSeconds": 120,
   "extra": {
     "mode": "nonSponsored",
@@ -144,7 +144,7 @@ All bech32m-encoded addresses (resource, account, component, transaction-intent 
     "network": "radix:mainnet",
     "amount": "10",
     "asset": "resource_rdx1tknxxxxxxxxxradxrdxxxxxxxxx009923554798xxxxxxxxxradxrd",
-    "payTo": "account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehpkf6zh",
+    "payTo": "account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehss5d52",
     "maxTimeoutSeconds": 60,
     "extra": {
       "mode": "sponsored",
@@ -173,7 +173,7 @@ All bech32m-encoded addresses (resource, account, component, transaction-intent 
     "network": "radix:stokenet",
     "amount": "25",
     "asset": "resource_tdx_2_1tknxxxxxxxxxradxrdxxxxxxxxx009923554798xxxxxxxxxtfd2jc",
-    "payTo": "account_tdx_2_129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehpkf6zh",
+    "payTo": "account_tdx_2_129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehrlel8s",
     "maxTimeoutSeconds": 120,
     "extra": {
       "mode": "nonSponsored",
@@ -444,7 +444,7 @@ The facilitator settles a verified sponsored payment as follows:
   "success": true,
   "transaction": "txid_rdx1qfum8kywlta7gk4r5cf3p8xdvr6kv39dxfl06ykhzrclm8emwrex3jnj6s",
   "network": "radix:mainnet",
-  "payer": "account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehpkf6zh"
+  "payer": "account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehss5d52"
 }
 ```
 
@@ -597,7 +597,7 @@ VERIFY_PARENT
 ASSERT_WORKTOP_IS_EMPTY;
 
 CALL_METHOD
-    Address("account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehpkf6zh")
+    Address("account_rdx129a9wuey40lducsne6r8e5q7xmt07068gcede0x0nrwtsnehss5d52")
     "withdraw"
     Address("resource_rdx1tknxxxxxxxxxradxrdxxxxxxxxx009923554798xxxxxxxxxradxrd")
     Decimal("10")
