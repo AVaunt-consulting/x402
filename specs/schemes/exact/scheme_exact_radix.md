@@ -40,12 +40,12 @@ sequenceDiagram
     Note over Client: 4. Sign subintent, producing<br/>SignedPartialTransactionV2
     Client->>Server: 5. Retry request with PAYMENT-SIGNATURE header<br/>(hex-encoded SBOR payload)
     Server->>Facilitator: 6. POST /verify<br/>(PaymentPayload + PaymentRequirements)
-    Note over Facilitator: 7. Deserialize subintent; validate structure,<br/>signatures, exact transfer semantics,<br/>temporal bounds, facilitator safety
+    Note over Facilitator: 7. Deserialize subintent and validate structure,<br/>signatures, exact transfer semantics,<br/>temporal bounds, facilitator safety
     Facilitator->>Radix: 7a. POST /transaction/preview-v2<br/>(root transaction wrapping client subintent)
     Radix-->>Facilitator: 7b. CommitSuccess + expected balance deltas
     Facilitator-->>Server: 7c. Payment verified
     Server->>Facilitator: 8. POST /settle
-    Note over Facilitator: 9. Wrap subintent as child in root TransactionV2:<br/>lock_fee (facilitator pays gas), yield to child,<br/>deposit yielded tokens to payTo;<br/>notary_is_signatory = true; notarize
+    Note over Facilitator: 9. Wrap subintent as child in root TransactionV2 with<br/>lock_fee (facilitator pays gas), yield to child,<br/>deposit yielded tokens to payTo,<br/>notary_is_signatory = true, then notarize
     Facilitator->>Radix: 9a. POST /transaction/submit
     Facilitator->>Radix: 10. POST /transaction/status (poll)
     Radix-->>Facilitator: 10a. CommittedSuccess
@@ -76,10 +76,10 @@ sequenceDiagram
 
     Client->>Server: 1. Request protected resource
     Server-->>Client: 2. 402 Payment Required + PaymentRequirements<br/>(extra.mode = "nonSponsored", intentDiscriminator)
-    Note over Client: 3. Build 4-instruction TransactionV2<br/>(lock_fee, withdraw, take, try_deposit_or_abort);<br/>sign and notarize, producing NotarizedTransactionV2
+    Note over Client: 3. Build 4-instruction TransactionV2<br/>(lock_fee, withdraw, take, try_deposit_or_abort),<br/>sign and notarize, producing NotarizedTransactionV2
     Client->>Server: 4. Retry request with PAYMENT-SIGNATURE header<br/>(hex-encoded SBOR payload)
     Server->>Facilitator: 5. POST /verify<br/>(PaymentPayload + PaymentRequirements)
-    Note over Facilitator: 6. Deserialize transaction; validate structure,<br/>signatures, exact transfer semantics,<br/>temporal bounds, facilitator safety
+    Note over Facilitator: 6. Deserialize transaction and validate structure,<br/>signatures, exact transfer semantics,<br/>temporal bounds, facilitator safety
     Facilitator->>Radix: 6a. POST /transaction/preview-v2<br/>(client transaction as-is)
     Radix-->>Facilitator: 6b. CommitSuccess + expected balance deltas
     Facilitator-->>Server: 6c. Payment verified
