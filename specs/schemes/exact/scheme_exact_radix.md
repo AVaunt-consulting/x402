@@ -27,6 +27,32 @@ In both modes the facilitator MUST only submit transactions that pay exactly `re
 
 ### A) Sponsored flow (recommended)
 
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server as Resource Server
+    participant Facilitator
+    participant Radix as Radix Network (Gateway)
+
+    Client->>Server: 1. Request protected resource
+    Server-->>Client: 2. 402 Payment Required + PaymentRequirements<br/>(extra.mode = "sponsored", notaryBadge, intentDiscriminator)
+    Note over Client: 3. Build 5-instruction payment subintent<br/>(VERIFY_PARENT ... YIELD_TO_PARENT)
+    Note over Client: 4. Sign subintent, producing<br/>SignedPartialTransactionV2
+    Client->>Server: 5. Retry request with PAYMENT-SIGNATURE header<br/>(hex-encoded SBOR payload)
+    Server->>Facilitator: 6. POST /verify<br/>(PaymentPayload + PaymentRequirements)
+    Note over Facilitator: 7. Deserialize subintent; validate structure,<br/>signatures, exact transfer semantics,<br/>temporal bounds, facilitator safety
+    Facilitator->>Radix: 7a. POST /transaction/preview-v2<br/>(root transaction wrapping client subintent)
+    Radix-->>Facilitator: 7b. CommitSuccess + expected balance deltas
+    Facilitator-->>Server: 7c. Payment verified
+    Server->>Facilitator: 8. POST /settle
+    Note over Facilitator: 9. Wrap subintent as child in root TransactionV2:<br/>lock_fee (facilitator pays gas), yield to child,<br/>deposit yielded tokens to payTo;<br/>notary_is_signatory = true; notarize
+    Facilitator->>Radix: 9a. POST /transaction/submit
+    Facilitator->>Radix: 10. POST /transaction/status (poll)
+    Radix-->>Facilitator: 10a. CommittedSuccess
+    Facilitator-->>Server: 10b. SettlementResponse (transaction, payer)
+    Server-->>Client: 11. 200 OK + resource<br/>(PAYMENT-RESPONSE header)
+```
+
 1. **Client** requests a protected resource.
 2. **Resource Server** returns `402 Payment Required` with `PaymentRequirements` containing `extra.mode = "sponsored"`.
 3. **Client** builds a Radix payment subintent that withdraws the exact fungible resource amount and yields it to the parent (see [Client Subintent Construction](#client-subintent-construction-sponsored)).
@@ -40,6 +66,30 @@ In both modes the facilitator MUST only submit transactions that pay exactly `re
 11. **Resource Server** returns the protected response.
 
 ### B) Non-sponsored flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server as Resource Server
+    participant Facilitator
+    participant Radix as Radix Network (Gateway)
+
+    Client->>Server: 1. Request protected resource
+    Server-->>Client: 2. 402 Payment Required + PaymentRequirements<br/>(extra.mode = "nonSponsored", intentDiscriminator)
+    Note over Client: 3. Build 4-instruction TransactionV2<br/>(lock_fee, withdraw, take, try_deposit_or_abort);<br/>sign and notarize, producing NotarizedTransactionV2
+    Client->>Server: 4. Retry request with PAYMENT-SIGNATURE header<br/>(hex-encoded SBOR payload)
+    Server->>Facilitator: 5. POST /verify<br/>(PaymentPayload + PaymentRequirements)
+    Note over Facilitator: 6. Deserialize transaction; validate structure,<br/>signatures, exact transfer semantics,<br/>temporal bounds, facilitator safety
+    Facilitator->>Radix: 6a. POST /transaction/preview-v2<br/>(client transaction as-is)
+    Radix-->>Facilitator: 6b. CommitSuccess + expected balance deltas
+    Facilitator-->>Server: 6c. Payment verified
+    Server->>Facilitator: 7. POST /settle
+    Facilitator->>Radix: 8. POST /transaction/submit<br/>(client transaction as-is, no modification)
+    Facilitator->>Radix: 9. POST /transaction/status (poll)
+    Radix-->>Facilitator: 9a. CommittedSuccess
+    Facilitator-->>Server: 9b. SettlementResponse (transaction, payer)
+    Server-->>Client: 10. 200 OK + resource<br/>(PAYMENT-RESPONSE header)
+```
 
 1. **Client** requests a protected resource.
 2. **Resource Server** returns `402 Payment Required` with `PaymentRequirements` containing `extra.mode = "nonSponsored"`.
